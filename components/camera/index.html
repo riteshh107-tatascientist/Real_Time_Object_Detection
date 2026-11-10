@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;padding:0;background:transparent;font-family:Inter,system-ui,sans-serif;color:#e8eefc}
+  #bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:4px 2px}
+  button{border:0;border-radius:10px;padding:11px 18px;font:600 14px system-ui,sans-serif;cursor:pointer;color:#06101a;
+         background:linear-gradient(135deg,#19e3b1,#6c8cff);transition:transform .15s,opacity .15s}
+  button:active{transform:scale(.97)}
+  button.stop{background:#ff5a78;color:#fff}
+  #msg{font-size:13px;color:#8a98b8}
+  #dot{width:9px;height:9px;border-radius:50%;background:#556;display:inline-block;margin-right:6px}
+  #dot.on{background:#19e3b1;animation:p 1.3s infinite}
+  @keyframes p{0%{box-shadow:0 0 0 0 rgba(25,227,177,.7)}100%{box-shadow:0 0 0 9px transparent}}
+</style></head>
+<body>
+<div id="bar">
+  <button id="btn">Start camera</button>
+  <span id="msg"><i id="dot"></i><span id="txt">Camera is off</span></span>
+</div>
+<video id="v" playsinline muted autoplay style="display:none"></video>
+<canvas id="c" style="display:none"></canvas>
+<script>
+// Minimal Streamlit component protocol (no build step needed).
+const send = (type, data) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, data), "*");
+const setValue = v => send("streamlit:setComponentValue", {value: v, dataType: "json"});
+const $ = id => document.getElementById(id);
+let args = {}, stream = null, running = false, waiting = false, lastAck = null, seq = 0, sentAt = 0, facing = "user";
+
+function status(text, on){ $("txt").textContent = text; $("dot").className = on ? "on" : ""; }
+
+async function startCamera(){
+  stopStream();
+  facing = args.facing || "user";
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {facingMode: {ideal: facing}, width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
+    const v = $("v"); v.srcObject = stream; await v.play();
+    running = true; waiting = false;
+    $("btn").textContent = "Stop camera"; $("btn").className = "stop";
+    status(facing === "environment" ? "Back camera live" : "Front camera live", true);
+    setTimeout(capture, 300);
+  } catch (e) {
+    running = false;
+    status("Camera error: " + e.name, false);
+    setValue({error: e.name + ": " + (e.message || ""), n: ++seq});
+  }
+}
+function stopStream(){
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+}
+function stopCamera(){
+  running = false; stopStream();
+  $("btn").textContent = "Start camera"; $("btn").className = "";
+  status("Camera is off", false);
+  setValue({stopped: true, n: ++seq});
+}
+function capture(){
+  const v = $("v");
+  if (!running || waiting || !v.videoWidth) { if (running && !waiting) setTimeout(capture, 120); return; }
+  const maxW = args.max_width || 640;
+  const w = Math.min(v.videoWidth, maxW), h = Math.round(v.videoHeight * w / v.videoWidth);
+  const c = $("c"); c.width = w; c.height = h;
+  c.getContext("2d").drawImage(v, 0, 0, w, h);
+  waiting = true; sentAt = Date.now();
+  setValue({img: c.toDataURL("image/jpeg", 0.72), n: ++seq, facing: facing, w: w, h: h});
+}
+$("btn").onclick = () => running ? stopCamera() : startCamera();
+
+window.addEventListener("message", e => {
+  if (!e.data || e.data.type !== "streamlit:render") return;
+  const old = args; args = e.data.args || {};
+  if (running && old.facing !== undefined && args.facing !== old.facing) { startCamera(); return; }  // front <-> back
+  if (args.ack !== lastAck) {                    // Python finished processing the previous frame
+    lastAck = args.ack; waiting = false;
+    if (running) setTimeout(capture, args.delay_ms || 60);
+  }
+});
+setInterval(() => { if (running && waiting && Date.now() - sentAt > 8000) { waiting = false; capture(); } }, 2000);  // watchdog
+send("streamlit:componentReady", {apiVersion: 1});
+send("streamlit:setFrameHeight", {height: 58});
+</script></body></html>

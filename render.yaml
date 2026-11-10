@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: visionpro
+    runtime: docker
+    plan: starter           # YOLOE + PyTorch needs about 0.7-1 GB RAM; the 512 MB free plan will run out of memory
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: ADMIN_USERNAME
+        sync: false         # you type these in the Render dashboard, never in Git
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: PERSISTENT_STORAGE
+        value: "false"
